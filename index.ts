@@ -1,17 +1,19 @@
-import { Layer, Option, Tracer } from "effect";
-import type { Context } from "effect/Context";
-import type { Exit } from "effect/Exit";
+import { Cause, Exit, Layer, Tracer } from "effect";
 
-const evaluateSymbol = "~effect/Effect/evaluate" as const;
-
+/** Attribute value types accepted by Cloudflare's `span.setAttribute`. */
 export type CloudflareSpanAttributeValue = string | number | boolean | undefined;
 
+/** The `Span` handed to a `tracing.startActiveSpan` callback. */
 export interface CloudflareRuntimeSpan {
   readonly isTraced: boolean;
   setAttribute(key: string, value: CloudflareSpanAttributeValue): void;
   end(): void;
 }
 
+/**
+ * The subset of Cloudflare's `tracing` API this tracer needs, satisfied by both
+ * `import { tracing } from "cloudflare:workers"` and `ctx.tracing`.
+ */
 export interface CloudflareTracing {
   startActiveSpan<T, A extends Array<unknown>>(
     name: string,
@@ -20,16 +22,28 @@ export interface CloudflareTracing {
   ): T;
 }
 
+/**
+ * Converts an Effect span attribute into a Cloudflare attribute value, or
+ * `undefined` to omit it. Called on every attribute of every sampled span, so
+ * keep it cheap. A mapper that throws never fails the request: the attribute is
+ * dropped and the failure is reported with `console.error`.
+ */
 export type AttributeMapper = (
   key: string,
   value: unknown,
 ) => CloudflareSpanAttributeValue;
 
+/** Options for {@link make} and {@link layer}. */
 export interface Options {
   readonly tracing: CloudflareTracing;
   readonly attributeMapper?: AttributeMapper | undefined;
 }
 
+/**
+ * Maps Effect span attributes onto the value types Cloudflare accepts, dropping
+ * everything else. `bigint` is rendered as a string; unsupported values are
+ * omitted rather than stringified.
+ */
 export const defaultAttributeMapper: AttributeMapper = (_key, value) => {
   switch (typeof value) {
     case "string":
@@ -39,146 +53,114 @@ export const defaultAttributeMapper: AttributeMapper = (_key, value) => {
       return Number.isFinite(value) ? value : undefined;
     case "bigint":
       return value.toString();
-    case "undefined":
-      return undefined;
     default:
       return undefined;
   }
 };
 
+/** Creates a `Tracer` backed by Cloudflare Workers custom spans. */
 export const make = (options: Options): Tracer.Tracer => {
   const attributeMapper = options.attributeMapper ?? defaultAttributeMapper;
 
   return Tracer.make({
-    span(spanOptions) {
-      return new CloudflareEffectSpan({
+    span: (spanOptions) =>
+      new CloudflareSpan({
         ...spanOptions,
         tracing: options.tracing,
         attributeMapper,
-      });
-    },
-    context(primitive, fiber) {
-      const span = fiber.currentSpan;
-      if (span instanceof CloudflareEffectSpan) {
-        return span.runInContext(() => primitive[evaluateSymbol](fiber));
-      }
-      return primitive[evaluateSymbol](fiber);
-    },
+      }),
   });
 };
 
+/** Provides {@link make} as the `Tracer` for the wrapped Effect. */
 export const layer = (options: Options): Layer.Layer<never> =>
   Layer.succeed(Tracer.Tracer, make(options));
 
-interface CloudflareEffectSpanOptions {
-  readonly name: string;
-  readonly parent: Option.Option<Tracer.AnySpan>;
-  readonly annotations: Context<never>;
-  readonly links: Array<Tracer.SpanLink>;
-  readonly startTime: bigint;
-  readonly kind: Tracer.SpanKind;
-  readonly sampled: boolean;
+type NativeSpanOptions = ConstructorParameters<typeof Tracer.NativeSpan>[0];
+
+interface CloudflareSpanOptions extends NativeSpanOptions {
   readonly tracing: CloudflareTracing;
   readonly attributeMapper: AttributeMapper;
 }
 
-class CloudflareEffectSpan implements Tracer.Span {
-  readonly _tag = "Span" as const;
-  readonly spanId = randomHexString(16);
-  readonly traceId: string;
-  readonly attributes = new Map<string, unknown>();
-  readonly links: Array<Tracer.SpanLink>;
-  readonly sampled: boolean;
-  readonly name: string;
-  readonly parent: Option.Option<Tracer.AnySpan>;
-  readonly annotations: Context<never>;
-  readonly kind: Tracer.SpanKind;
+class CloudflareSpan extends Tracer.NativeSpan {
+  private readonly runtimeSpan: CloudflareRuntimeSpan | undefined;
 
-  status: Tracer.SpanStatus;
-
-  private runtimeSpan: CloudflareRuntimeSpan | undefined;
-
-  constructor(private readonly options: CloudflareEffectSpanOptions) {
-    this.name = options.name;
-    this.parent = options.parent;
-    this.annotations = options.annotations;
-    this.links = options.links;
-    this.sampled = options.sampled;
-    this.kind = options.kind;
-    this.traceId = Option.getOrUndefined(options.parent)?.traceId ?? randomHexString(32);
-    this.status = {
-      _tag: "Started",
-      startTime: options.startTime,
-    };
+  constructor(private readonly options: CloudflareSpanOptions) {
+    super(options);
+    // `startActiveSpan` is the only Cloudflare entry point that hands back a
+    // span outliving its callback; the callback body is intentionally empty
+    // because Cloudflare only keeps the span active for its duration, which is
+    // useless to a fiber that resumes across many later ticks.
+    this.runtimeSpan = options.sampled
+      ? options.tracing.startActiveSpan(options.name, (span) => span)
+      : undefined;
   }
 
-  runInContext<X>(evaluate: () => X): X {
-    if (this.runtimeSpan !== undefined || this.status._tag === "Ended" || !this.sampled) {
-      return evaluate();
-    }
-
-    return this.options.tracing.startActiveSpan(this.name, (span) => {
-      this.runtimeSpan = span;
-      this.flushAttributes(span);
-      const result = evaluate();
-      if (this.status._tag === "Ended") {
-        span.end();
-      }
-      return result;
-    });
-  }
-
-  end(endTime: bigint, exit: Exit<unknown, unknown>): void {
+  override end(endTime: bigint, exit: Exit.Exit<unknown, unknown>): void {
     if (this.status._tag === "Ended") return;
-    this.status = {
-      _tag: "Ended",
-      startTime: this.status.startTime,
-      endTime,
-      exit,
-    };
+    this.recordExit(exit);
+    super.end(endTime, exit);
     this.runtimeSpan?.end();
   }
 
-  attribute(key: string, value: unknown): void {
-    this.attributes.set(key, value);
-    if (this.runtimeSpan !== undefined) {
-      setCloudflareAttribute(this.runtimeSpan, this.options.attributeMapper, key, value);
+  override attribute(key: string, value: unknown): void {
+    super.attribute(key, value);
+    const span = this.runtimeSpan;
+    // `isTraced` is false for unsampled invocations and after the Cloudflare
+    // span ended, both cases where the attribute is discarded anyway, so skip
+    // the mapper instead of paying for it.
+    if (span === undefined || !span.isTraced) return;
+    let mapped: CloudflareSpanAttributeValue;
+    try {
+      mapped = this.options.attributeMapper(key, value);
+    } catch (error) {
+      // Telemetry must not take the request down with it.
+      console.error(`cf-effect-telemetry: attributeMapper threw for "${key}"`, error);
+      return;
+    }
+    if (mapped !== undefined) {
+      span.setAttribute(key, mapped);
     }
   }
 
-  event(_name: string, _startTime: bigint, _attributes?: Record<string, unknown>): void {
-    // Cloudflare custom spans do not expose span events yet.
-  }
+  /**
+   * Effect records log messages as span events and Cloudflare has no event API,
+   * so keeping them would grow unboundedly for long-lived spans (Durable
+   * Objects, streamed responses) with nothing ever reading them.
+   */
+  override event(): void {}
 
-  addLinks(links: ReadonlyArray<Tracer.SpanLink>): void {
-    this.links.push(...links);
-  }
+  /**
+   * Cloudflare spans have no outcome/status API, so the `Exit` is recorded as
+   * attributes, mirroring the conventions of Effect's own OTLP tracer.
+   */
+  private recordExit(exit: Exit.Exit<unknown, unknown>): void {
+    if (Exit.isSuccess(exit)) return;
+    const cause = exit.cause;
 
-  private flushAttributes(span: CloudflareRuntimeSpan): void {
-    for (const [key, value] of this.attributes) {
-      setCloudflareAttribute(span, this.options.attributeMapper, key, value);
+    if (Cause.hasInterruptsOnly(cause)) {
+      this.attribute("span.label", "⚠︎ Interrupted");
+      this.attribute("status.interrupted", true);
+      return;
     }
+
+    this.attribute("otel.status_code", "ERROR");
+    const error = Cause.prettyErrors(cause)[0];
+    if (error === undefined) return;
+    this.attribute("otel.status_description", error.message);
+    this.attribute("exception.type", error.name);
+    this.attribute("exception.message", error.message);
+    this.attribute("exception.stacktrace", truncate(error.stack ?? Cause.pretty(cause)));
   }
 }
 
-const setCloudflareAttribute = (
-  span: CloudflareRuntimeSpan,
-  attributeMapper: AttributeMapper,
-  key: string,
-  value: unknown,
-): void => {
-  const mapped = attributeMapper(key, value);
-  if (mapped !== undefined) {
-    span.setAttribute(key, mapped);
-  }
-};
+/**
+ * Cloudflare does not document an attribute size cap, so keep stack traces well
+ * clear of the limits tracing backends typically impose. `attributeMapper` can
+ * trim or drop them further.
+ */
+const stackTraceLimit = 4096;
 
-const randomHexString = (length: number): string => {
-  const bytes = new Uint8Array(length);
-  crypto.getRandomValues(bytes);
-  let result = "";
-  for (let i = 0; i < length; i++) {
-    result += (bytes[i]! & 0x0f).toString(16);
-  }
-  return result;
-};
+const truncate = (stack: string): string =>
+  stack.length > stackTraceLimit ? `${stack.slice(0, stackTraceLimit)}…` : stack;
