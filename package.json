@@ -2,7 +2,23 @@
   "name": "@just-be/cf-effect-telemetry",
   "version": "0.1.0",
   "description": "Effect v4 tracer provider for Cloudflare Workers custom spans",
+  "license": "MIT",
+  "author": "Justin Bennett <oss@just-be.dev>",
+  "keywords": [
+    "effect",
+    "cloudflare",
+    "workers",
+    "tracing",
+    "opentelemetry"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/just-be-dev/cf-effect-telemetry"
+  },
+  "homepage": "https://github.com/just-be-dev/cf-effect-telemetry#readme",
+  "bugs": "https://github.com/just-be-dev/cf-effect-telemetry/issues",
   "type": "module",
+  "sideEffects": false,
   "module": "./dist/index.js",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
