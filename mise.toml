@@ -57,6 +57,9 @@ bun -e "
     exists = Boolean(metadata.versions?.[version])
   }
 
+  if (exists) {
+    console.error('::notice::' + name + '@' + version + ' already exists on npm; skipping publish. Bump the version to release.')
+  }
   console.log('exists=' + String(exists))
 " >> "${GITHUB_OUTPUT:-/dev/stdout}"
 '''
