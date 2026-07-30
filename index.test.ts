@@ -306,4 +306,81 @@ describe("Cloudflare Effect telemetry", () => {
     expect(stack.endsWith("…")).toBe(true);
     expect(stack.startsWith("Error: deep")).toBe(true);
   });
+
+  test("routes span events to onEvent, including Effect logs", async () => {
+    const tracing = makeTracing();
+    const events: Array<{
+      readonly spanName: string;
+      readonly name: string;
+      readonly startTime: bigint;
+      readonly attributes: Record<string, unknown>;
+    }> = [];
+
+    await Effect.gen(function* () {
+      const span = yield* Effect.currentSpan;
+      span.event("manual", 7n, { manual: true });
+      yield* Effect.logInfo("through the tracer logger");
+    }).pipe(
+      Effect.annotateLogs("request", "abc"),
+      Effect.withSpan("events"),
+      Effect.provide(
+        layer({
+          tracing,
+          onEvent: (span, name, startTime, attributes) => {
+            events.push({ spanName: span.name, name, startTime, attributes });
+          },
+        }),
+      ),
+      Effect.runPromise,
+    );
+
+    expect(events.map((event) => event.name)).toEqual([
+      "manual",
+      "through the tracer logger",
+    ]);
+    expect(events[0]).toMatchObject({
+      spanName: "events",
+      startTime: 7n,
+      attributes: { manual: true },
+    });
+    // Effect's own tracerLogger supplies level, fiber and log annotations.
+    expect(events[1]?.attributes).toMatchObject({
+      "effect.logLevel": "INFO",
+      request: "abc",
+    });
+    // Events stay out of the Cloudflare span, which cannot hold them.
+    expect(tracing.spans[0]?.attributes.size).toBe(0);
+  });
+
+  test("keeps a throwing onEvent from failing the request", async () => {
+    const tracing = makeTracing();
+    const consoleError = console.error;
+    const errors: Array<unknown> = [];
+    console.error = (...args: Array<unknown>) => {
+      errors.push(args[0]);
+    };
+
+    try {
+      const result = await Effect.logInfo("boom").pipe(
+        Effect.withSpan("events"),
+        Effect.provide(
+          layer({
+            tracing,
+            onEvent: () => {
+              throw new Error("sink exploded");
+            },
+          }),
+        ),
+        Effect.as("ok"),
+        Effect.runPromise,
+      );
+
+      expect(result).toBe("ok");
+    } finally {
+      console.error = consoleError;
+    }
+
+    expect(errors.some((error) => String(error).includes('onEvent threw for "boom"'))).toBe(true);
+    expect(tracing.spans[0]?.endCount).toBe(1);
+  });
 });

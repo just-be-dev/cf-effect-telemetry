@@ -33,10 +33,28 @@ export type AttributeMapper = (
   value: unknown,
 ) => CloudflareSpanAttributeValue;
 
+/**
+ * Receives span events, which Cloudflare cannot store. Runs synchronously
+ * inside `span.event`, so an effectful sink has to be run with
+ * `Effect.runFork`. A handler that throws never fails the request.
+ *
+ * `Effect.log*` reaches this through Effect's `Logger.tracerLogger`, but a
+ * `Logger` is the better seam for log records: it also carries the level, the
+ * cause and the fiber. Use this for events no logger sees, such as the
+ * `db.transaction.*` milestones Effect's SQL client emits.
+ */
+export type SpanEventHandler = (
+  span: Tracer.Span,
+  name: string,
+  startTime: bigint,
+  attributes: Record<string, unknown>,
+) => void;
+
 /** Options for {@link make} and {@link layer}. */
 export interface Options {
   readonly tracing: CloudflareTracing;
   readonly attributeMapper?: AttributeMapper | undefined;
+  readonly onEvent?: SpanEventHandler | undefined;
 }
 
 /**
@@ -68,6 +86,7 @@ export const make = (options: Options): Tracer.Tracer => {
         ...spanOptions,
         tracing: options.tracing,
         attributeMapper,
+        onEvent: options.onEvent,
       }),
   });
 };
@@ -81,6 +100,7 @@ type NativeSpanOptions = ConstructorParameters<typeof Tracer.NativeSpan>[0];
 interface CloudflareSpanOptions extends NativeSpanOptions {
   readonly tracing: CloudflareTracing;
   readonly attributeMapper: AttributeMapper;
+  readonly onEvent: SpanEventHandler | undefined;
 }
 
 class CloudflareSpan extends Tracer.NativeSpan {
@@ -125,11 +145,20 @@ class CloudflareSpan extends Tracer.NativeSpan {
   }
 
   /**
-   * Effect records log messages as span events and Cloudflare has no event API,
-   * so keeping them would grow unboundedly for long-lived spans (Durable
-   * Objects, streamed responses) with nothing ever reading them.
+   * Cloudflare has no event API, so events go to `onEvent` when one is
+   * configured and are dropped otherwise — retaining them would grow
+   * unboundedly for long-lived spans (Durable Objects, streamed responses)
+   * with nothing ever reading them.
    */
-  override event(): void {}
+  override event(name: string, startTime: bigint, attributes?: Record<string, unknown>): void {
+    const onEvent = this.options.onEvent;
+    if (onEvent === undefined) return;
+    try {
+      onEvent(this, name, startTime, attributes ?? {});
+    } catch (error) {
+      console.error(`cf-effect-telemetry: onEvent threw for "${name}"`, error);
+    }
+  }
 
   /**
    * Cloudflare spans have no outcome/status API, so the `Exit` is recorded as

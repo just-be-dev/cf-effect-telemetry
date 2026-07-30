@@ -45,6 +45,37 @@ Cloudflare spans have no outcome/status API, so a failing `Exit` is recorded as 
 
 A mapper that throws never fails the request: the attribute is dropped and the failure is reported with `console.error`.
 
+## Span events
+
+Cloudflare has no event API, so span events are dropped by default rather than accumulated on a span nobody reads. Pass `onEvent` to route them to a sink of your own — resolve the sink in your own layer and the tracer stays unaware of it:
+
+```ts
+import { tracing } from "cloudflare:workers";
+import { Effect, Layer, Tracer } from "effect";
+import { make } from "@just-be/cf-effect-telemetry";
+
+const CloudflareTelemetry = Layer.effect(
+  Tracer.Tracer,
+  Effect.gen(function* () {
+    const sink = yield* MyEventSink;
+    return make({
+      tracing,
+      // `event` is synchronous; fork if the sink is an Effect.
+      onEvent: (span, name, startTime, attributes) =>
+        Effect.runFork(sink.record({ span: span.name, name, startTime, attributes })),
+    });
+  }),
+);
+```
+
+For `Effect.log*` a `Logger` is the better seam. Effect's default logger set is `{ defaultLogger, tracerLogger }`, and `tracerLogger` is what converts log records into span events — so a log reaches `onEvent` already, but only as a message plus attributes. A logger receives the level, the `Cause`, the fiber and its annotations, all of which `span.event` has flattened away. Install yours the usual way, and drop `tracerLogger` if you do not want the duplicate:
+
+```ts
+Effect.provide(program, Logger.layer([Logger.defaultLogger, myLogger]));
+```
+
+Use `onEvent` for events no logger produces — the `db.transaction.*` milestones Effect's SQL client emits, or `span.event` calls from other libraries. A handler that throws never fails the request; the failure is reported with `console.error`.
+
 ## Sampling
 
 Unsampled Effect spans (`Effect.withSpan(name, { sampled: false })`, or anything filtered out by `Tracer.MinimumTraceLevel`) never open a Cloudflare span. When Cloudflare itself is not tracing an invocation, `span.isTraced` is `false`, so attributes are not mapped at all — nothing would be recorded anyway. This is why local `wrangler dev` shows spans with no attributes: it does not sample traces, regardless of `head_sampling_rate`.
@@ -55,7 +86,7 @@ These follow from Cloudflare's tracing API, not from Effect:
 
 - **Flat span tree.** Cloudflare derives parent/child from the active async context and offers no manual parent wiring, and a `startActiveSpan` span is only the active parent for the duration of its callback. An Effect fiber resumes across many later ticks, so Effect spans land as siblings of the request's root span rather than nested. Effect's own span tree (`parent`, `traceId`, `spanId`) is still intact for other Effect tracers.
 - **Platform spans are not nested.** `fetch`, KV, D1, and other auto-instrumented operations attach to the request root span, not to the enclosing Effect span.
-- **No span events.** Effect turns `Effect.log` calls into span events and Cloudflare has no event API, so spans from this tracer drop them rather than accumulate them for the lifetime of the span. Log output still reaches Cloudflare through `console`, attributed to the request root span.
+- **No span events.** Cloudflare has no event API, so events are dropped unless you pass `onEvent` (see above). Log output still reaches Cloudflare through `console`, attributed to the request root span.
 - **No links or span kind.** Cloudflare exposes neither, so `Effect.linkSpans` and the span `kind` are not forwarded.
 
 ## Verifying against the runtime
