@@ -1,15 +1,32 @@
-# cf-effect-telemtry
+# cf-effect-telemetry
 
-To install dependencies:
+Effect v4 tracer provider for Cloudflare Workers custom spans.
 
-```bash
-bun install
+It bridges `Effect.withSpan`, `Effect.useSpan`, `Effect.annotateCurrentSpan`, and other Effect tracing APIs to Cloudflare Workers `tracing.startActiveSpan()`. The Cloudflare span is started when the Effect span first becomes the active fiber span, and it is ended manually when Effect closes the span.
+
+```ts
+import { Effect } from "effect";
+import { tracing } from "cloudflare:workers";
+import { layer as cloudflareTelemetry } from "cf-effect-telemetry";
+
+const program = Effect.gen(function* () {
+  yield* Effect.annotateCurrentSpan("route", "/users/:id");
+  return new Response("ok");
+}).pipe(Effect.withSpan("worker.fetch"));
+
+export default {
+  fetch() {
+    return Effect.runPromise(
+      program.pipe(Effect.provide(cloudflareTelemetry({ tracing }))),
+    );
+  },
+};
 ```
 
-To run:
+You can pass `ctx.tracing` instead of the imported `tracing` object:
 
-```bash
-bun run index.ts
+```ts
+Effect.provide(program, cloudflareTelemetry({ tracing: ctx.tracing }));
 ```
 
-This project was created using `bun init` in bun v1.3.1. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
+Only Cloudflare-supported span attributes are emitted by default: `string`, finite `number`, `boolean`, and `bigint` as a string. Use `attributeMapper` to customize conversion or redaction.

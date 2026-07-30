@@ -1,9 +1,16 @@
 {
-  "name": "cf-effect-telemtry",
+  "name": "cf-effect-telemetry",
   "module": "index.ts",
   "type": "module",
   "private": true,
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "import": "./index.ts"
+    }
+  },
   "scripts": {
+    "test": "bun test",
     "typecheck": "tsc --noEmit",
     "prepare": "effect-tsgo patch"
   },
