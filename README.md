@@ -1,4 +1,4 @@
-# cf-effect-telemetry
+# @just-be/cf-effect-telemetry
 
 Effect v4 tracer provider for Cloudflare Workers custom spans.
 
@@ -7,7 +7,7 @@ It bridges `Effect.withSpan`, `Effect.useSpan`, `Effect.annotateCurrentSpan`, an
 ```ts
 import { Effect } from "effect";
 import { tracing } from "cloudflare:workers";
-import { layer as cloudflareTelemetry } from "cf-effect-telemetry";
+import { layer as cloudflareTelemetry } from "@just-be/cf-effect-telemetry";
 
 const program = Effect.gen(function* () {
   yield* Effect.annotateCurrentSpan("route", "/users/:id");
