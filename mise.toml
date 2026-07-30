@@ -19,6 +19,10 @@ run = "bun run check"
 description = "Build package output"
 run = "bun run build"
 
+[tasks.integration]
+description = "Run the tracer against the real Workers runtime"
+run = "bun run integration"
+
 [tasks.typecheck]
 description = "Run TypeScript type checking"
 run = "bun run typecheck"

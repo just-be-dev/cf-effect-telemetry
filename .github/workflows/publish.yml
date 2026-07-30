@@ -29,6 +29,9 @@ jobs:
       - name: Check
         run: mise run check
 
+      - name: Integration
+        run: mise run integration
+
       - name: Build
         run: mise run build
 

@@ -43,6 +43,7 @@
   "scripts": {
     "build": "rm -rf dist && tsc --project tsconfig.build.json",
     "check": "bun run typecheck && bun run test",
+    "integration": "wrangler types --cwd integration && tsc --noEmit --project integration/tsconfig.json && bun integration/check.ts",
     "prepack": "bun run build",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
@@ -52,6 +53,7 @@
     "@effect/tsgo": "^0.19.0",
     "@types/bun": "latest",
     "effect": "4.0.0-beta.92",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "wrangler": "^4.115.0"
   }
 }

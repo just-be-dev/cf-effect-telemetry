@@ -1,0 +1,12 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "cf-effect-telemetry-integration",
+  "main": "./worker.ts",
+  "compatibility_date": "2026-07-01",
+  "observability": {
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    }
+  }
+}
