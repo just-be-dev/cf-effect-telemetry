@@ -17,15 +17,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Required: the runner image ships npm 10.x, below the 11.5.1 floor for
-      # trusted publishing (OIDC), and `mise.toml` installs only bun. Node 24
-      # bundles npm 11.x; registry-url writes the ~/.npmrc registry entry.
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          registry-url: https://registry.npmjs.org
-
+      # mise provides node (for npm) and bun; see mise.toml [tools].
       - name: Setup Mise
         uses: jdx/mise-action@v2
 
