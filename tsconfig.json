@@ -30,5 +30,9 @@
 
     // Effect language service
     "plugins": [{ "name": "@effect/language-service" }]
-  }
+  },
+
+  // Compiled by integration/tsconfig.json instead: the Workers runtime types it
+  // needs collide with the bun/DOM globals used everywhere else.
+  "exclude": ["integration/worker.ts", "integration/worker-configuration.d.ts"]
 }

@@ -1,0 +1,46 @@
+name: Publish Package
+
+# Gated on CI: this runs only after the CI workflow succeeds, so the checks are
+# never duplicated here.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish if version is new
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # workflow_run defaults to the default branch tip; pin to the commit
+          # CI actually validated.
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      # mise provides node (for npm) and bun; see mise.toml [tools].
+      - name: Setup Mise
+        uses: jdx/mise-action@v2
+
+      - name: Read package version
+        id: pkg
+        run: mise run package-version
+
+      - name: Check registry
+        id: registry
+        env:
+          PKG_NAME: ${{ steps.pkg.outputs.name }}
+          PKG_VERSION: ${{ steps.pkg.outputs.version }}
+        run: mise run registry-check
+
+      - name: Publish
+        # `prepack` builds dist, so no separate build step is needed.
+        if: steps.registry.outputs.exists == 'false'
+        run: mise run publish
