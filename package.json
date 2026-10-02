@@ -1,6 +1,6 @@
 {
   "name": "@just-be/cf-effect-telemetry",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Effect v4 tracer provider for Cloudflare Workers custom spans",
   "license": "MIT",
   "author": "Justin Bennett <oss@just-be.dev>",
