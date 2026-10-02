@@ -8,7 +8,7 @@ import { layer, type CloudflareRuntimeSpan, type CloudflareTracing } from "../in
  * workerd accepted the exact shapes this package relies on.
  */
 
-class IntegrationError extends Schema.TaggedErrorClass<IntegrationError>()("IntegrationError", {
+class IntegrationError extends Schema.TaggedError<IntegrationError>()("IntegrationError", {
   message: Schema.String,
 }) {}
 

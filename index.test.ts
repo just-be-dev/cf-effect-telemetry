@@ -14,7 +14,7 @@ interface RecordedSpan extends CloudflareRuntimeSpan {
   endCount: number;
 }
 
-class BoomError extends Schema.TaggedErrorClass<BoomError>()("BoomError", {
+class BoomError extends Schema.TaggedError<BoomError>()("BoomError", {
   message: Schema.String,
 }) {}
 
